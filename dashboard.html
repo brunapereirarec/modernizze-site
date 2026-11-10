@@ -611,6 +611,16 @@
         </div>
       </div>
     </div>
+
+    <div class="card" style="margin-top:16px;">
+      <strong style="font-size:.9rem;">Backup e importação</strong>
+      <p style="color:var(--text-mut); font-size:.8rem; margin-top:2px; margin-bottom:16px;">Baixe uma cópia dos seus dados ou importe clientes, eventos e contratos de um arquivo .json. A importação soma aos dados atuais, sem apagar nada.</p>
+      <div style="display:flex; gap:10px; flex-wrap:wrap;">
+        <button class="btn" onclick="document.getElementById('importFile').click()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="4" x2="12" y2="15"/><polyline points="7 9 12 4 17 9"/><line x1="5" y1="20" x2="19" y2="20"/></svg>Importar dados</button>
+        <button class="btn-ghost" onclick="exportBackup()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="4" x2="12" y2="15"/><polyline points="7 10 12 15 17 10"/><line x1="5" y1="20" x2="19" y2="20"/></svg>Exportar backup</button>
+        <input type="file" id="importFile" accept=".json,application/json" style="display:none;" onchange="importDataFile(this)" />
+      </div>
+    </div>
   </section>
 
 </main>
@@ -1571,6 +1581,123 @@ function saveConfig() {
   };
   save();
   toast('Dados salvos.');
+}
+
+/* ───────────────────────── IMPORTAR / EXPORTAR ─────────────────────────
+Formato do arquivo .json (todas as listas são opcionais):
+{ "clients": [{name, email, whatsapp, funcao, status: lead|negociacao|ativo|inativo}],
+  "events": [{cliente, tipo, data: "AAAA-MM-DD", local, horaInicio: "HH:MM", horasContratadas, valorContrato,
+              formaPagamento: nenhum|pix|cartao|dinheiro|transferencia|boleto,
+              parcelas: [{valor, vencimento}], custos: [{descricao, valor, data}],
+              proLabore: {percentual, aplicadoSobre: lucro|total, quandoLancar: entrada|rateado|fim},
+              equipe: [{nome, funcao, email}], diasAposEvento, tipoDias: uteis|corridos, observacoes,
+              status: andamento|entregue}],
+  "team": [{name, email, whatsapp, role: Funcionário|Prestador|Dono}],
+  "custosFixos": [{nome, valor, recorrencia}] }
+Um contrato é o bloco financeiro de um evento (valorContrato, parcelas, custos, proLabore).
+Itens que já existem (mesmo id, mesmo nome, ou mesmo cliente+data+tipo) são ignorados. */
+const str = v => String(v ?? '').trim();
+const normKey = v => str(v).toLowerCase();
+const oneOf = (v, list, def) => list.includes(v) ? v : def;
+const num = v => { const n = Number(v); return isFinite(n) ? n : 0; };
+const isoDate = v => /^\d{4}-\d{2}-\d{2}$/.test(str(v)) ? str(v) : '';
+const objList = v => Array.isArray(v) ? v.filter(x => x && typeof x === 'object') : [];
+
+function normClient(c) {
+  const name = str(c.name ?? c.nome);
+  if (!name) return null;
+  return { id: str(c.id) || uid('c'), name, email: str(c.email), whatsapp: str(c.whatsapp), funcao: str(c.funcao),
+           status: oneOf(c.status, ['lead','negociacao','ativo','inativo'], 'lead') };
+}
+function normEvent(e) {
+  const cliente = str(e.cliente), data = isoDate(e.data);
+  if (!cliente || !data) return null;
+  const pl = e.proLabore && typeof e.proLabore === 'object' ? e.proLabore : {};
+  return {
+    id: str(e.id) || uid('e'), cliente, tipo: str(e.tipo), data, local: str(e.local),
+    horaInicio: str(e.horaInicio), horasContratadas: str(e.horasContratadas),
+    valorContrato: num(e.valorContrato),
+    formaPagamento: oneOf(e.formaPagamento, ['nenhum','pix','cartao','dinheiro','transferencia','boleto'], 'nenhum'),
+    parcelas: objList(e.parcelas).map(p => ({ valor: num(p.valor), vencimento: isoDate(p.vencimento) })),
+    custos: objList(e.custos).map(c => ({ descricao: str(c.descricao), valor: num(c.valor), data: isoDate(c.data) })),
+    proLabore: { percentual: num(pl.percentual), aplicadoSobre: oneOf(pl.aplicadoSobre, ['lucro','total'], 'lucro'),
+                 quandoLancar: oneOf(pl.quandoLancar, ['entrada','rateado','fim'], 'entrada') },
+    equipe: objList(e.equipe).filter(m => str(m.nome)).map(m => ({ sourceId: str(m.sourceId), nome: str(m.nome), funcao: str(m.funcao), email: str(m.email), enviarResumo: !!m.enviarResumo })),
+    diasAposEvento: e.diasAposEvento ? num(e.diasAposEvento) : null,
+    tipoDias: oneOf(e.tipoDias, ['uteis','corridos'], 'uteis'),
+    enviarNotificacoes: !!e.enviarNotificacoes,
+    observacoes: str(e.observacoes),
+    status: oneOf(e.status, ['andamento','entregue'], 'andamento')
+  };
+}
+function normTeam(t) {
+  const name = str(t.name ?? t.nome);
+  if (!name) return null;
+  return { id: str(t.id) || uid('t'), name, email: str(t.email), whatsapp: str(t.whatsapp),
+           role: oneOf(t.role ?? t.funcao, ['Funcionário','Prestador','Dono'], 'Funcionário') };
+}
+function normCusto(c) {
+  const nome = str(c.nome);
+  if (!nome) return null;
+  return { id: str(c.id) || uid('f'), nome, valor: num(c.valor), recorrencia: str(c.recorrencia) || 'Mensal' };
+}
+
+const IMPORT_SPECS = [
+  { key: 'clients', label: 'cliente', plural: 'clientes', normalize: normClient, same: (a, b) => normKey(a.name) === normKey(b.name) },
+  { key: 'events', label: 'evento', plural: 'eventos', normalize: normEvent, same: (a, b) => normKey(a.cliente) === normKey(b.cliente) && a.data === b.data && normKey(a.tipo) === normKey(b.tipo) },
+  { key: 'team', label: 'membro da equipe', plural: 'membros da equipe', normalize: normTeam, same: (a, b) => normKey(a.name) === normKey(b.name) },
+  { key: 'custosFixos', label: 'custo fixo', plural: 'custos fixos', normalize: normCusto, same: (a, b) => normKey(a.nome) === normKey(b.nome) }
+];
+
+function planImport(file) {
+  let skippedDup = 0, invalid = 0;
+  const plan = IMPORT_SPECS.map(spec => {
+    const existing = DATA[spec.key] || [];
+    const toAdd = [];
+    (Array.isArray(file[spec.key]) ? file[spec.key] : []).forEach(raw => {
+      const item = raw && typeof raw === 'object' ? spec.normalize(raw) : null;
+      if (!item) { invalid++; return; }
+      if (existing.concat(toAdd).some(x => x.id === item.id || spec.same(x, item))) skippedDup++;
+      else toAdd.push(item);
+    });
+    return { spec, toAdd };
+  });
+  return { plan, skippedDup, invalid };
+}
+
+function importDataFile(input) {
+  const f = input.files && input.files[0];
+  input.value = '';
+  if (!f) return;
+  const reader = new FileReader();
+  reader.onerror = () => toast('Não foi possível ler o arquivo.');
+  reader.onload = () => {
+    let parsed;
+    try { parsed = JSON.parse(reader.result); } catch (e) { toast('Arquivo inválido: não é um JSON.'); return; }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) { toast('Arquivo inválido.'); return; }
+    const { plan, skippedDup, invalid } = planImport(parsed);
+    const total = plan.reduce((s, p) => s + p.toAdd.length, 0);
+    if (!total) { toast(skippedDup ? 'Nada novo: tudo isso já existe no dashboard.' : 'Nenhum dado válido encontrado no arquivo.'); return; }
+    let msg = 'Importar para o dashboard?\n\n' + plan.filter(p => p.toAdd.length)
+      .map(p => `• ${p.toAdd.length} ${p.toAdd.length === 1 ? p.spec.label : p.spec.plural}`).join('\n');
+    if (skippedDup) msg += `\n\n${skippedDup} já existiam e serão ignorados.`;
+    if (invalid) msg += `\n${invalid} com dados incompletos serão ignorados.`;
+    if (!confirm(msg)) return;
+    plan.forEach(p => { DATA[p.spec.key] = (DATA[p.spec.key] || []).concat(p.toAdd); });
+    save(); renderAll();
+    toast(`${total} ${total === 1 ? 'item importado' : 'itens importados'}.`);
+  };
+  reader.readAsText(f);
+}
+
+function exportBackup() {
+  const payload = Object.assign({ formato: 'modernizze-dashboard', exportadoEm: new Date().toISOString() }, DATA);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }));
+  a.download = `modernizze-backup-${todayISO()}.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  toast('Backup exportado.');
 }
 
 /* ───────────────────────── SEARCH ───────────────────────── */
