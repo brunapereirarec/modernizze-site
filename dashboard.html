@@ -783,8 +783,10 @@
       <button class="modal-close" onclick="closeModal('clientModal')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg></button>
     </div>
     <div class="field"><label>Nome</label><input id="cliNome" /></div>
+    <div class="field"><label>CPF / CNPJ (opcional)</label><input id="cliDocumento" placeholder="000.000.000-00" /></div>
     <div class="field"><label>E-mail</label><input id="cliEmail" type="email" /></div>
     <div class="field"><label>WhatsApp</label><input id="cliWhatsapp" placeholder="(00) 00000-0000" /></div>
+    <div class="field"><label>Endereço (opcional)</label><input id="cliEndereco" placeholder="Rua, número, bairro, cidade - UF, CEP" /></div>
     <div class="field"><label>Função (opcional)</label><input id="cliFuncao" placeholder="Noiva, agência, contato financeiro..." /></div>
     <div class="field"><label>Status</label>
       <select id="cliStatus">
@@ -1481,8 +1483,10 @@ function openClientModal(id) {
   document.getElementById('clientModalTitle').textContent = c ? 'Editar contato' : 'Novo contato';
   document.getElementById('clientModalSaveBtn').textContent = c ? 'Salvar alterações' : 'Salvar';
   document.getElementById('cliNome').value = c ? c.name : '';
+  document.getElementById('cliDocumento').value = c ? (c.documento || '') : '';
   document.getElementById('cliEmail').value = c ? (c.email || '') : '';
   document.getElementById('cliWhatsapp').value = c ? (c.whatsapp || '') : '';
+  document.getElementById('cliEndereco').value = c ? (c.endereco || '') : '';
   document.getElementById('cliFuncao').value = c ? (c.funcao || '') : '';
   document.getElementById('cliStatus').value = c ? (c.status || 'lead') : 'lead';
   openModal('clientModal');
@@ -1492,8 +1496,10 @@ function saveClient() {
   if (!name) { toast('Informe o nome.'); return; }
   const payload = {
     name,
+    documento: document.getElementById('cliDocumento').value.trim(),
     email: document.getElementById('cliEmail').value.trim(),
     whatsapp: document.getElementById('cliWhatsapp').value.trim(),
+    endereco: document.getElementById('cliEndereco').value.trim(),
     funcao: document.getElementById('cliFuncao').value.trim(),
     status: document.getElementById('cliStatus').value
   };
@@ -1585,7 +1591,7 @@ function saveConfig() {
 
 /* ───────────────────────── IMPORTAR / EXPORTAR ─────────────────────────
 Formato do arquivo .json (todas as listas são opcionais):
-{ "clients": [{name, email, whatsapp, funcao, status: lead|negociacao|ativo|inativo}],
+{ "clients": [{name, documento (CPF/CNPJ), email, whatsapp, endereco, funcao, status: lead|negociacao|ativo|inativo}],
   "events": [{cliente, tipo, data: "AAAA-MM-DD", local, horaInicio: "HH:MM", horasContratadas, valorContrato,
               formaPagamento: nenhum|pix|cartao|dinheiro|transferencia|boleto,
               parcelas: [{valor, vencimento}], custos: [{descricao, valor, data}],
@@ -1606,7 +1612,8 @@ const objList = v => Array.isArray(v) ? v.filter(x => x && typeof x === 'object'
 function normClient(c) {
   const name = str(c.name ?? c.nome);
   if (!name) return null;
-  return { id: str(c.id) || uid('c'), name, email: str(c.email), whatsapp: str(c.whatsapp), funcao: str(c.funcao),
+  return { id: str(c.id) || uid('c'), name, documento: str(c.documento ?? c.cpf ?? c.cnpj), email: str(c.email),
+           whatsapp: str(c.whatsapp), endereco: str(c.endereco), funcao: str(c.funcao),
            status: oneOf(c.status, ['lead','negociacao','ativo','inativo'], 'lead') };
 }
 function normEvent(e) {
